@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>製図ツール（パーツ重なり順・消しゴム対応）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+      background: #f1f5f9;
+      color: #0f172a;
+    }
+    .grid-bg {
+      background-color: #ffffff;
+      background-image:
+        linear-gradient(to right, rgba(148, 163, 184, 0.25) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(148, 163, 184, 0.25) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    .box-item {
+      position: absolute;
+      left: 0;
+      top: 0;
+      cursor: grab;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.2;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      will-change: transform;
+    }
+    .box-item:active {
+      cursor: grabbing;
+    }
+    .box-item.selected {
+      outline: 3px solid #0f172a;
+    }
+    #inkCanvas {
+      position: absolute;
+      inset: 0;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- 上部バー -->
+  <header class="bg-slate-900 text-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+    <div class="font-bold text-base">📐 4面図づくりツール</div>
+    <nav class="flex gap-1.5 text-sm font-bold">
+      <button id="tab1" class="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white">1. 画像・パーツ数</button>
+      <button id="tab2" class="px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">2. 寸法入力</button>
+      <button id="tab3" class="px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600">3. 組み立て・ペン</button>
+    </nav>
+    <button id="btnSavePng" class="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm px-3.5 py-1.5 rounded-lg">
+      PNG保存
+    </button>
+  </header>
+
+  <!-- STEP 1: 出来上がり画像 ＋ パーツ種類と個数 -->
+  <section id="step1" class="max-w-4xl w-full mx-auto p-5 space-y-5">
+    <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-200 space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="font-bold text-base">① 出来上がり画像を入れる</h2>
+        <label class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-3 py-1.5 rounded-lg cursor-pointer">
+          画像を選ぶ
+          <input id="fileInput" type="file" accept="image/*" class="hidden" />
+        </label>
+      </div>
+      <div id="dropArea" class="border-2 border-dashed border-slate-300 rounded-xl h-48 flex items-center justify-center bg-slate-50 overflow-hidden">
+        <img id="samplePreview" src="" alt="" class="max-h-44 object-contain hidden" />
+        <span id="dropText" class="text-sm text-slate-500">ここに写真やイラストをドロップ（または上のボタンから選択）</span>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-200 space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="font-bold text-base">② パーツの名前と個数を決める</h2>
+        <button id="btnAddType" class="bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold px-3 py-1.5 rounded-lg">
+          ＋ パーツを追加
+        </button>
+      </div>
+      <div id="typeList" class="space-y-2"></div>
+      <div class="pt-3 flex justify-end">
+        <button id="goStep2" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-5 py-2.5 rounded-lg text-sm">
+          次へ：寸法を入力する →
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2: 各パーツの縦・横・奥行（cm）入力 -->
+  <section id="step2" class="max-w-4xl w-full mx-auto p-5 space-y-4 hidden">
+    <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-200 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="font-bold text-base">③ 各パーツの寸法（cm）を入力する</h2>
+        <button id="backStep1" class="text-sm text-slate-600 hover:underline">← 1に戻る</button>
+      </div>
+      <div id="dimList" class="space-y-2"></div>
+      <div class="pt-3 flex justify-end">
+        <button id="goStep3" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-2.5 rounded-lg text-sm">
+          4面パーツを作って組み立てへ →
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 3: 広々とした組み合わせエリア ＋ ペン・消しゴム・重なり順操作 -->
+  <section id="step3" class="flex-1 flex flex-col lg:flex-row overflow-hidden hidden" style="height: calc(100vh - 56px);">
+    <!-- 左：参考画像と未配置パーツ -->
+    <aside class="w-full lg:w-72 bg-white border-r border-slate-200 p-3 flex flex-col gap-3 overflow-y-auto shrink-0">
+      <div class="border border-slate-200 rounded-lg p-2 bg-slate-50">
+        <div class="text-xs font-bold text-slate-600 mb-1">出来上がり画像</div>
+        <img id="refImgSmall" src="" alt="" class="w-full max-h-32 object-contain rounded bg-white hidden" />
+        <div id="refImgEmpty" class="text-xs text-slate-400 py-4 text-center">画像なし</div>
+      </div>
+
+      <div class="flex-1 flex flex-col">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-xs font-bold text-slate-700">パーツ一覧</span>
+          <span id="leftCount" class="text-xs font-bold text-blue-600">0個</span>
+        </div>
+        <div id="partsBin" class="grid grid-cols-2 lg:grid-cols-1 gap-1.5 overflow-y-auto"></div>
+      </div>
+    </aside>
+
+    <!-- 右：広々キャンバス＋ツールバー -->
+    <main class="flex-1 flex flex-col bg-slate-200 overflow-hidden">
+      <div class="bg-white border-b border-slate-300 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+        <!-- 動かす・ペン・消しゴム -->
+        <div class="flex flex-wrap items-center gap-1.5">
+          <button id="toolMove" class="px-3 py-1 rounded text-xs font-bold bg-slate-900 text-white">動かす</button>
+          <button id="toolPen" class="px-3 py-1 rounded text-xs font-bold bg-slate-100 text-slate-800 hover:bg-slate-200">ペン</button>
+          <button id="toolEraser" class="px-3 py-1 rounded text-xs font-bold bg-slate-100 text-slate-800 hover:bg-slate-200">消しゴム</button>
+          <input id="colorPicker" type="color" value="#dc2626" class="w-6 h-6 cursor-pointer border-0 bg-transparent ml-1" title="ペン色" />
+          <select id="penWidth" class="border rounded px-1.5 py-0.5 text-xs">
+            <option value="2">細</option>
+            <option value="4" selected>中</option>
+            <option value="8">太</option>
+          </select>
+        </div>
+
+        <!-- 重なり順・回転・かくれ線・戻す・自動配置 -->
+        <div class="flex flex-wrap items-center gap-1">
+          <button id="btnFront" class="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 px-2 py-1 rounded text-xs font-bold" title="選択パーツを一番前へ">最前面</button>
+          <button id="btnForward" class="bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded text-xs font-bold" title="選択パーツを1つ前へ">前へ</button>
+          <button id="btnBackward" class="bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded text-xs font-bold" title="選択パーツを1つ後ろへ">後ろへ</button>
+          <button id="btnBack" class="bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 px-2 py-1 rounded text-xs font-bold" title="選択パーツを一番後ろへ">最背面</button>
+          <span class="mx-0.5 text-slate-300">|</span>
+          <button id="btnAuto" class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded text-xs font-bold">AI自動配置</button>
+          <button id="btnRot" class="bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded text-xs font-bold">90°回転</button>
+          <button id="btnDash" class="bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded text-xs font-bold">かくれ線</button>
+          <button id="btnDel" class="bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded text-xs font-bold">戻す</button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-auto p-4 flex items-start justify-center">
+        <div id="board" class="grid-bg relative border-2 border-slate-400 shadow bg-white shrink-0" style="width: 1200px; height: 820px;">
+          <!-- 4面枠 -->
+          <div class="pointer-events-none absolute inset-0" style="z-index: 1;">
+            <div style="position:absolute; left:340px; top:20px; width:440px; height:300px; border:1.5px dashed #94a3b8; border-radius:6px;">
+              <span class="bg-slate-800 text-white text-xs font-bold px-2 py-0.5 rounded-tl rounded-br">上から</span>
+            </div>
+            <div style="position:absolute; left:24px; top:350px; width:280px; height:430px; border:1.5px dashed #94a3b8; border-radius:6px;">
+              <span class="bg-slate-800 text-white text-xs font-bold px-2 py-0.5 rounded-tl rounded-br">左側面</span>
+            </div>
+            <div style="position:absolute; left:340px; top:350px; width:440px; height:430px; border:2px solid #475569; border-radius:6px;">
+              <span class="bg-blue-700 text-white text-xs font-bold px-2 py-0.5 rounded-tl rounded-br">正面図</span>
+            </div>
+            <div style="position:absolute; left:816px; top:350px; width:360px; height:430px; border:1.5px dashed #94a3b8; border-radius:6px;">
+              <span class="bg-slate-800 text-white text-xs font-bold px-2 py-0.5 rounded-tl rounded-br">右側面</span>
+            </div>
+          </div>
+
+          <!-- パーツレイヤー -->
+          <div id="placedLayer" class="absolute inset-0" style="z-index: 10;"></div>
+
+          <!-- ペンレイヤー -->
+          <canvas id="inkCanvas" width="1200" height="820" style="z-index: 20;"></canvas>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <script>
+    const COLORS = [
+      { bg: "rgba(59,130,246,0.35)", border: "#2563eb", text: "#1e3a8a", dot: "#3b82f6" },
+      { bg: "rgba(16,185,129,0.35)", border: "#059669", text: "#064e3b", dot: "#10b981" },
+      { bg: "rgba(245,158,11,0.35)", border: "#d97706", text: "#78350f", dot: "#f59e0b" },
+      { bg: "rgba(168,85,247,0.35)", border: "#9333ea", text: "#4c1d95", dot: "#a855f7" },
+      { bg: "rgba(244,63,94,0.35)",  border: "#e11d48", text: "#881337", dot: "#f43f5e" },
+      { bg: "rgba(6,182,212,0.35)",  border: "#0891b2", text: "#164e63", dot: "#06b6d4" }
+    ];
+
+    let types = [
+      { id: "p1", name: "天板", count: 1 },
+      { id: "p2", name: "側板", count: 2 }
+    ];
+    let dims = {};
+    let pieces = []; // 配列の後ろにあるものほど重なり順が上（最前面）
+    let selectedId = null;
+    let tool = "move"; // move | pen | eraser
+    let imgDataUrl = "";
+    const PX = 6;
+
+    const placedLayer = document.getElementById("placedLayer");
+    const ink = document.getElementById("inkCanvas");
+    const ictx = ink.getContext("2d");
+
+    // ステップ切替
+    const step1 = document.getElementById("step1");
+    const step2 = document.getElementById("step2");
+    const step3 = document.getElementById("step3");
+    const tab1 = document.getElementById("tab1");
+    const tab2 = document.getElementById("tab2");
+    const tab3 = document.getElementById("tab3");
+
+    function showStep(n) {
+      step1.classList.toggle("hidden", n !== 1);
+      step2.classList.toggle("hidden", n !== 2);
+      step3.classList.toggle("hidden", n !== 3);
+      [tab1, tab2, tab3].forEach((t, i) => {
+        t.className = (i + 1 === n)
+          ? "px-3.5 py-1.5 rounded-lg bg-blue-600 text-white"
+          : "px-3.5 py-1.5 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600";
+      });
+      if (n === 2) renderDims();
+      if (n === 3) {
+        buildPieces();
+        updateRefImg();
+      }
+    }
+
+    tab1.onclick = () => showStep(1);
+    tab2.onclick = () => showStep(2);
+    tab3.onclick = () => showStep(3);
+    document.getElementById("goStep2").onclick = () => showStep(2);
+    document.getElementById("backStep1").onclick = () => showStep(1);
+    document.getElementById("goStep3").onclick = () => showStep(3);
+
+    function syncDims() {
+      types.forEach(pt => {
+        for (let i = 0; i < pt.count; i++) {
+          const k = `${pt.id}_${i}`;
+          if (!dims[k]) dims[k] = { t: 2, y: 30, o: 20 };
+        }
+      });
+    }
+
+    function renderTypes() {
+      syncDims();
+      const list = document.getElementById("typeList");
+      list.innerHTML = "";
+      types.forEach((pt, idx) => {
+        const c = COLORS[idx % COLORS.length];
+        const row = document.createElement("div");
+        row.className = "flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-2";
+        row.innerHTML = `
+          <span class="w-4 h-4 rounded-full shrink-0" style="background:${c.dot}"></span>
+          <input type="text" value="${pt.name}" class="t-name flex-1 border rounded px-2.5 py-1 text-sm font-bold bg-white" />
+          <span class="text-xs text-slate-600">個数</span>
+          <input type="number" min="0" max="15" value="${pt.count}" class="t-cnt w-16 border rounded px-2 py-1 text-sm text-center font-bold bg-white" />
+          <button class="t-del text-xs text-slate-400 hover:text-rose-600 px-1.5">削除</button>
+        `;
+        row.querySelector(".t-name").oninput = e => { pt.name = e.target.value || "部品"; };
+        row.querySelector(".t-cnt").onchange = e => {
+          pt.count = Math.max(0, Math.min(15, parseInt(e.target.value, 10) || 0));
+          syncDims();
+        };
+        row.querySelector(".t-del").onclick = () => {
+          types = types.filter(x => x.id !== pt.id);
+          renderTypes();
+        };
+        list.appendChild(row);
+      });
+    }
+
+    document.getElementById("btnAddType").onclick = () => {
+      types.push({ id: "p_" + Date.now(), name: `部品${types.length + 1}`, count: 1 });
+      renderTypes();
+    };
+
+    function renderDims() {
+      syncDims();
+      const box = document.getElementById("dimList");
+      box.innerHTML = "";
+      types.forEach((pt, idx) => {
+        const c = COLORS[idx % COLORS.length];
+        for (let i = 0; i < pt.count; i++) {
+          const k = `${pt.id}_${i}`;
+          const d = dims[k];
+          const card = document.createElement("div");
+          card.className = "flex flex-wrap items-center justify-between gap-2 bg-slate-50 border rounded-lg px-3 py-2 text-sm";
+          card.style.borderLeft = `5px solid ${c.dot}`;
+          card.innerHTML = `
+            <span class="font-bold w-24" style="color:${c.text}">${pt.name}${i + 1}</span>
+            <label class="flex items-center gap-1">縦 <input type="number" step="0.1" value="${d.t}" class="d-t w-16 border rounded px-1.5 py-0.5 bg-white text-right" /> cm</label>
+            <label class="flex items-center gap-1">横 <input type="number" step="0.1" value="${d.y}" class="d-y w-16 border rounded px-1.5 py-0.5 bg-white text-right" /> cm</label>
+            <label class="flex items-center gap-1">奥行 <input type="number" step="0.1" value="${d.o}" class="d-o w-16 border rounded px-1.5 py-0.5 bg-white text-right" /> cm</label>
+          `;
+          card.querySelector(".d-t").oninput = e => { d.t = Math.max(0.1, parseFloat(e.target.value) || 0.1); };
+          card.querySelector(".d-y").oninput = e => { d.y = Math.max(0.1, parseFloat(e.target.value) || 0.1); };
+          card.querySelector(".d-o").oninput = e => { d.o = Math.max(0.1, parseFloat(e.target.value) || 0.1); };
+          box.appendChild(card);
+        }
+      });
+    }
+
+    function buildPieces() {
+      syncDims();
+      pieces = [];
+      selectedId = null;
+      const views = [
+        { code: "正面", getWH: d => [d.y, d.t] },
+        { code: "上",   getWH: d => [d.y, d.o] },
+        { code: "左側", getWH: d => [d.o, d.t] },
+        { code: "右側", getWH: d => [d.o, d.t] }
+      ];
+      types.forEach((pt, idx) => {
+        const c = COLORS[idx % COLORS.length];
+        for (let i = 0; i < pt.count; i++) {
+          const d = dims[`${pt.id}_${i}`];
+          views.forEach(v => {
+            const [wCm, hCm] = v.getWH(d);
+            pieces.push({
+              uid: `${pt.id}_${i}_${v.code}_${Math.random().toString(36).slice(2, 6)}`,
+              label: `${pt.name}${i + 1}（${v.code}）`,
+              view: v.code,
+              w: Math.max(26, Math.min(320, wCm * PX)),
+              h: Math.max(20, Math.min(260, hCm * PX)),
+              color: c,
+              placed: false,
+              dash: false,
+              x: 0,
+              y: 0
+            });
+          });
+        }
+      });
+      renderBin();
+      renderBoard();
+    }
+
+    function renderBin() {
+      const bin = document.getElementById("partsBin");
+      bin.innerHTML = "";
+      const rem = pieces.filter(p => !p.placed);
+      document.getElementById("leftCount").textContent = `${rem.length}個`;
+      rem.forEach(p => {
+        const item = document.createElement("div");
+        item.className = "rounded p-2 border-2 text-xs font-bold cursor-grab select-none";
+        item.style.background = p.color.bg;
+        item.style.borderColor = p.color.border;
+        item.style.color = p.color.text;
+        item.textContent = p.label;
+        item.draggable = true;
+        item.ondragstart = e => e.dataTransfer.setData("text/plain", p.uid);
+        item.onclick = () => {
+          if (tool !== "move") return;
+          // 配列の末尾へ移動して最前面に配置
+          pieces = pieces.filter(x => x.uid !== p.uid).concat(p);
+          p.placed = true;
+          p.x = 380 + Math.round(Math.random() * 100);
+          p.y = 390 + Math.round(Math.random() * 100);
+          selectedId = p.uid;
+          renderBin();
+          renderBoard();
+        };
+        bin.appendChild(item);
+      });
+    }
+
+    const board = document.getElementById("board");
+    board.ondragover = e => e.preventDefault();
+    board.ondrop = e => {
+      e.preventDefault();
+      if (tool !== "move") return;
+      const uid = e.dataTransfer.getData("text/plain");
+      const p = pieces.find(x => x.uid === uid);
+      if (!p) return;
+      const rect = board.getBoundingClientRect();
+      pieces = pieces.filter(x => x.uid !== p.uid).concat(p);
+      p.placed = true;
+      p.x = Math.max(0, Math.min(1200 - p.w, Math.round(e.clientX - rect.left - p.w / 2)));
+      p.y = Math.max(0, Math.min(820 - p.h, Math.round(e.clientY - rect.top - p.h / 2)));
+      selectedId = p.uid;
+      renderBin();
+      renderBoard();
+    };
+
+    function updateSelectionStyles() {
+      placedLayer.querySelectorAll(".box-item").forEach(el => {
+        el.classList.toggle("selected", el.dataset.uid === selectedId);
+      });
+    }
+
+    function renderBoard() {
+      placedLayer.innerHTML = "";
+      const placedList = pieces.filter(p => p.placed);
+      placedList.forEach((p, zIdx) => {
+        const el = document.createElement("div");
+        el.dataset.uid = p.uid;
+        el.className = "box-item" + (selectedId === p.uid ? " selected" : "");
+        el.style.zIndex = String(10 + zIdx);
+        el.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+        el.style.width = p.w + "px";
+        el.style.height = p.h + "px";
+        el.style.background = p.color.bg;
+        el.style.border = `2px ${p.dash ? "dashed" : "solid"} ${p.color.border}`;
+        el.style.color = p.color.text;
+        el.textContent = p.label;
+        el.ondragstart = e => e.preventDefault();
+
+        let dragging = false;
+        let startPointerX = 0;
+        let startPointerY = 0;
+        let originX = 0;
+        let originY = 0;
+        let pendingX = p.x;
+        let pendingY = p.y;
+        let rafId = null;
+
+        el.addEventListener("pointerdown", e => {
+          if (tool !== "move") return;
+          if (e.button !== 0 && e.pointerType === "mouse") return;
+          e.stopPropagation();
+          e.preventDefault();
+
+          selectedId = p.uid;
+          updateSelectionStyles();
+          el.style.zIndex = "99";
+
+          dragging = true;
+          startPointerX = e.clientX;
+          startPointerY = e.clientY;
+          originX = p.x;
+          originY = p.y;
+          pendingX = p.x;
+          pendingY = p.y;
+
+          el.setPointerCapture(e.pointerId);
+        });
+
+        el.addEventListener("pointermove", e => {
+          if (!dragging) return;
+          const dx = e.clientX - startPointerX;
+          const dy = e.clientY - startPointerY;
+          pendingX = Math.max(0, Math.min(1200 - p.w, Math.round(originX + dx)));
+          pendingY = Math.max(0, Math.min(820 - p.h, Math.round(originY + dy)));
+
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              p.x = pendingX;
+              p.y = pendingY;
+              el.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+              rafId = null;
+            });
+          }
+        });
+
+        const endDrag = e => {
+          if (!dragging) return;
+          dragging = false;
+          if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          p.x = pendingX;
+          p.y = pendingY;
+          el.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+          el.style.zIndex = String(10 + zIdx);
+          if (el.hasPointerCapture(e.pointerId)) {
+            el.releasePointerCapture(e.pointerId);
+          }
+        };
+
+        el.addEventListener("pointerup", endDrag);
+        el.addEventListener("pointercancel", endDrag);
+
+        placedLayer.appendChild(el);
+      });
+    }
+
+    // 重なり順操作（最前面・前へ・後ろへ・最背面）
+    function moveOrder(mode) {
+      if (!selectedId) return;
+      const idx = pieces.findIndex(p => p.uid === selectedId);
+      if (idx === -1) return;
+      const [item] = pieces.splice(idx, 1);
+
+      if (mode === "front") {
+        pieces.push(item);
+      } else if (mode === "back") {
+        pieces.unshift(item);
+      } else if (mode === "forward") {
+        pieces.splice(Math.min(pieces.length, idx + 1), 0, item);
+      } else if (mode === "backward") {
+        pieces.splice(Math.max(0, idx - 1), 0, item);
+      }
+      renderBoard();
+    }
+
+    document.getElementById("btnFront").onclick = () => moveOrder("front");
+    document.getElementById("btnForward").onclick = () => moveOrder("forward");
+    document.getElementById("btnBackward").onclick = () => moveOrder("backward");
+    document.getElementById("btnBack").onclick = () => moveOrder("back");
+
+    document.getElementById("btnAuto").onclick = () => {
+      const spots = {
+        "上":   { x: 360, y: 50,  maxX: 750, rowH: 0 },
+        "左側": { x: 40,  y: 380, maxX: 280, rowH: 0 },
+        "正面": { x: 360, y: 380, maxX: 750, rowH: 0 },
+        "右側": { x: 832, y: 380, maxX: 1150,rowH: 0 }
+      };
+      const curX = { "上": 360, "左側": 40, "正面": 360, "右側": 832 };
+      const curY = { "上": 50,  "左側": 380, "正面": 380, "右側": 380 };
+      pieces.forEach(p => {
+        const s = spots[p.view];
+        if (!s) return;
+        if (curX[p.view] + p.w > s.maxX && curX[p.view] > s.x) {
+          curX[p.view] = s.x;
+          curY[p.view] += s.rowH + 10;
+          s.rowH = 0;
+        }
+        p.placed = true;
+        p.x = curX[p.view];
+        p.y = curY[p.view];
+        curX[p.view] += p.w + 10;
+        s.rowH = Math.max(s.rowH, p.h);
+      });
+      renderBin();
+      renderBoard();
+    };
+
+    document.getElementById("btnRot").onclick = () => {
+      const p = pieces.find(x => x.uid === selectedId);
+      if (p) { [p.w, p.h] = [p.h, p.w]; renderBoard(); }
+    };
+    document.getElementById("btnDash").onclick = () => {
+      const p = pieces.find(x => x.uid === selectedId);
+      if (p) { p.dash = !p.dash; renderBoard(); }
+    };
+    document.getElementById("btnDel").onclick = () => {
+      const p = pieces.find(x => x.uid === selectedId);
+      if (p) { p.placed = false; selectedId = null; renderBin(); renderBoard(); }
+    };
+
+    // ペン＆消しゴム（消すのは消しゴムのみ）
+    let drawing = false;
+
+    function setTool(t) {
+      tool = t;
+      document.getElementById("toolMove").className = "px-3 py-1 rounded text-xs font-bold " + (t === "move" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-800");
+      document.getElementById("toolPen").className = "px-3 py-1 rounded text-xs font-bold " + (t === "pen" ? "bg-rose-600 text-white" : "bg-slate-100 text-slate-800");
+      document.getElementById("toolEraser").className = "px-3 py-1 rounded text-xs font-bold " + (t === "eraser" ? "bg-amber-600 text-white" : "bg-slate-100 text-slate-800");
+
+      if (t === "move") {
+        ink.style.pointerEvents = "none";
+        ink.style.cursor = "default";
+      } else {
+        ink.style.pointerEvents = "auto";
+        ink.style.cursor = t === "pen" ? "crosshair" : "cell";
+      }
+    }
+    document.getElementById("toolMove").onclick = () => setTool("move");
+    document.getElementById("toolPen").onclick = () => setTool("pen");
+    document.getElementById("toolEraser").onclick = () => setTool("eraser");
+
+    ink.addEventListener("pointerdown", e => {
+      if (tool === "move") return;
+      drawing = true;
+      ink.setPointerCapture(e.pointerId);
+      const r = ink.getBoundingClientRect();
+      ictx.beginPath();
+      ictx.moveTo(e.clientX - r.left, e.clientY - r.top);
+    });
+    ink.addEventListener("pointermove", e => {
+      if (!drawing) return;
+      const r = ink.getBoundingClientRect();
+      const w = parseInt(document.getElementById("penWidth").value, 10) || 4;
+      if (tool === "eraser") {
+        ictx.globalCompositeOperation = "destination-out";
+        ictx.lineWidth = w * 4;
+      } else {
+        ictx.globalCompositeOperation = "source-over";
+        ictx.strokeStyle = document.getElementById("colorPicker").value;
+        ictx.lineWidth = w;
+      }
+      ictx.lineCap = "round";
+      ictx.lineJoin = "round";
+      ictx.lineTo(e.clientX - r.left, e.clientY - r.top);
+      ictx.stroke();
+    });
+    const endInk = e => {
+      if (!drawing) return;
+      drawing = false;
+      ictx.closePath();
+      ictx.globalCompositeOperation = "source-over";
+      if (ink.hasPointerCapture(e.pointerId)) {
+        ink.releasePointerCapture(e.pointerId);
+      }
+    };
+    ink.addEventListener("pointerup", endInk);
+    ink.addEventListener("pointercancel", endInk);
+
+    // 画像読込
+    function loadImgFile(file) {
+      if (!file || !file.type.startsWith("image/")) return;
+      const rd = new FileReader();
+      rd.onload = ev => {
+        imgDataUrl = ev.target.result;
+        const p = document.getElementById("samplePreview");
+        p.src = imgDataUrl;
+        p.classList.remove("hidden");
+        document.getElementById("dropText").classList.add("hidden");
+        updateRefImg();
+      };
+      rd.readAsDataURL(file);
+    }
+    function updateRefImg() {
+      const s = document.getElementById("refImgSmall");
+      const emp = document.getElementById("refImgEmpty");
+      if (imgDataUrl) {
+        s.src = imgDataUrl;
+        s.classList.remove("hidden");
+        emp.classList.add("hidden");
+      } else {
+        s.classList.add("hidden");
+        emp.classList.remove("hidden");
+      }
+    }
+    document.getElementById("fileInput").onchange = e => loadImgFile(e.target.files[0]);
+    const dropArea = document.getElementById("dropArea");
+    dropArea.ondragover = e => e.preventDefault();
+    dropArea.ondrop = e => { e.preventDefault(); loadImgFile(e.dataTransfer.files[0]); };
+
+    // PNG保存（重なり順を反映して描画）
+    document.getElementById("btnSavePng").onclick = () => {
+      const out = document.createElement("canvas");
+      out.width = 1200;
+      out.height = 820;
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, 1200, 820);
+
+      pieces.filter(p => p.placed).forEach(p => {
+        ctx.save();
+        ctx.fillStyle = p.color.bg;
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.strokeStyle = p.color.border;
+        ctx.lineWidth = 2;
+        if (p.dash) ctx.setLineDash([6, 4]);
+        ctx.strokeRect(p.x, p.y, p.w, p.h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = p.color.text;
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(p.label, p.x + p.w / 2, p.y + p.h / 2);
+        ctx.restore();
+      });
+
+      ctx.drawImage(ink, 0, 0);
+      const a = document.createElement("a");
+      a.download = "4menzu.png";
+      a.href = out.toDataURL("image/png");
+      a.click();
+    };
+
+    renderTypes();
+    setTool("move");
+  </script>
+</body>
+</html>
